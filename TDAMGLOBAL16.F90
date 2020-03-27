@@ -265,11 +265,13 @@
         USE DAMINITIAL_T, ONLY: KINT, KREAL, KREAL4,KINT8,auang,angau,p_i,ncen,rcen,atwt,atvdw
         USE DAM2016_DATA_T, ONLY: zn
 	    IMPLICIT NONE
+		type molecule
+		integer:: natoms
         CHARACTER(2), ALLOCATABLE:: bs(:)
-        REAL(KREAL), ALLOCATABLE:: bx(:),by(:),bz(:),bq(:),atwtn(:),atvdwn(:),dist(:)
-        REAL(KREAL), ALLOCATABLE:: bxl(:),byl(:),bzl(:)
-        REAL(KREAL):: Enj,cox,coy,coz,tmass
-	    INTEGER(KINT):: nb,flag
+        REAL(KREAL), ALLOCATABLE:: bx(:),by(:),bz(:),bq(:),bawt(:),bvdw(:)
+        REAL(KREAL):: cox,coy,coz
+		end type molecule
+        type(molecule),dimension(50):: molecules
     END MODULE
 !===============================================================================================
 !                 MODULE DAM2016_CONST_T
