@@ -98,7 +98,7 @@
         LOGICAL:: LDERIV2,LGRADIENT,LARGO,LEXACT,ISWINDOWS
 		CHARACTER      :: DIRSEP
 		CHARACTER(300) :: PROJECTNAME 
-		CHARACTER(256) :: FILENAME,NEWFILE, filenamewin   ! Modified by Rafa
+		CHARACTER(256) :: FILENAME,filenamewin   ! Modified by Rafa
 		CHARACTER(2), ALLOCATABLE :: ATMNAM(:) 
 		CHARACTER(2) :: ATMNMS(0:103) = (/							 &
 			"q ", "H ", "He", "Li", "Be", "B ", "C ", "N ", "O ", "F "   & 

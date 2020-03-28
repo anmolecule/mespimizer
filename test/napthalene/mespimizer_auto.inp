@@ -1,0 +1,8 @@
+$OPTIONS
+templatefile="cyclopropane.xyz"
+insertlocfile="napthalene-insertloc-cps.xyz"
+nocharge=.true.
+tssize=0.5
+rssize=20
+$END
+napthalene

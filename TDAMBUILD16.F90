@@ -4,27 +4,43 @@
         implicit none
         integer(kint)::iden,ierr,i,j,k,iw,jw,dum,nbatms,nb,flag
         real :: tarray(2), tiempo, dtime
-        integer:: nmols
-        REAL(KREAL) :: Enj,tssize 
+        integer:: nmols,splt,rssize,tn
+        real(kreal) :: Enj,tssize 
+        real(kreal) :: shiftx,shifty,shiftz,tcox,tcoy,tcoz
+        character(2),allocatable::pisym(:),ts(:)
+        real(kreal),allocatable ::tx(:),ty(:),tz(:),tq(:),tw(:),tv(:),pix(:),piy(:),piz(:)
+        character(256)::exec
+        character(256)::acmdout
+        character(256)::mstring
+        character(256):: preprocfile,templatefile,insertlocfile
+        character(256):: mespimizerinit,mespimizervis,mespimizerfinal,basename
+        character(10)::d1,d2,d3,d4,extn
+        integer::icmdout
+        logical:: nocharge
 !       character, external:: ncase
         namelist / options / lgradient, lderiv2, largo, lexact, &
-                & lmaxi,filename,newfile,iswindows,tssize
+                & lmaxi,filename,preprocfile,templatefile,insertlocfile,&
+                & iswindows,tssize,rssize
                          
         tiempo = dtime(tarray)
-        lgradient  = .true.
-        lderiv2    = .true.
-        largo      = .false.        ! IF .TRUE. LONG-RANGE POTENTIAL
-        lexact     = .false.        ! IF .TRUE. "EXACT" POTENTIAL IS TABULATED
-        iswindows  = .false.
-        lmaxi      = 15
-        filename   = ""
-        newfile    = ""
-        tssize     = 0.5
+        lgradient    = .true.
+        lderiv2      = .true.
+        largo        = .false.        ! IF .TRUE. LONG-RANGE POTENTIAL
+        lexact       = .false.        ! IF .TRUE. "EXACT" POTENTIAL IS TABULATED
+        iswindows    = .false.
+        lmaxi        = 15
+        filename     = ""
+        preprocfile  = ""
+        templatefile = ""
+        insertlocfile= ""
+        tssize       = 0.5
+        rssize       = 20
+        nocharge     = .true.
        
         read(5,options)     ! Read from standard input
         read(5,*) projectname
 
-! Decides if the user has provided projectname with full path.
+        ! Decides if the user has provided projectname with full path.
         if (iswindows) then
             dirsep = "\\"
             i = index(projectname,dirsep,.true.)    ! Checks position of last directory name separator
@@ -48,31 +64,127 @@
                 filenamewin = filenamewin(:i-1) // '\' // filenamewin(i+1:)
             end do
         endif
+
+        ! Figure out what files are provided
+        if (len_trim(templatefile)==0 .and. len_trim(insertlocfile)==0 &
+            .and. len_trim(preprocfile)==0) then
+            write(6,*) "Provide preprocfile or templatefile with &
+                        & insertlocfile"
+            stop
+        endif    
+        if (len(trim(preprocfile))/=0) then
+            write(6,*) "Preprocfile is provided. Templatefile &
+                        & and insertlocfile will be ignored"
+            write(6,*) "Note: Preprocfile should not contain &
+                        & parent molecule. "
+            preprocfile=trim(adjustl(preprocfile))
+            splt = index(preprocfile,'.',back=.True.)
+            basename=preprocfile(1:splt-1)
+            extn=preprocfile(splt:)
+
+        else    
+            if (len_trim(templatefile)/=0 .and. len_trim(insertlocfile)==0) then
+                write(6,*) "Templatefile requires insertlocfile to &
+                        &place the  template molecule. Exiting code."
+                stop
+            elseif (len_trim(templatefile)==0 .and. len_trim(insertlocfile)/=0) then
+                write(6,*) "Insertlocfile requires templatefile. &
+                          & Exiting code."
+                stop
+            elseif (len_trim(templatefile)/=0 .and. len_trim(insertlocfile)/=0) then
+                templatefile=trim(adjustl(templatefile))
+                splt = index(templatefile,'.',back=.True.)
+                basename=templatefile(1:splt-1)
+                extn=templatefile(splt:)
+            endif
+        endif    
+        if (iswindows) then
+            mespimizerinit=trim(filenamewin)//"_"//trim(basename)//"_init.xyz"
+            mespimizervis=trim(filenamewin)//"_"//trim(basename)//"_vis.xyz"
+            mespimizerfinal=trim(filenamewin)//"_"//trim(basename)//"_final.xyz"
+        else
+            mespimizerinit=trim(filename)//"_"//trim(basename)//"_init.xyz"
+            mespimizervis=trim(filename)//"_"//trim(basename)//"_vis.xyz"
+            mespimizerfinal=trim(filename)//"_"//trim(basename)//"_final.xyz"
+        endif
+        print *,mespimizerinit,mespimizervis,mespimizerfinal
+
         call predampot
-        !print *,"Number of centers",ncen
+        
+        ! Be it templatefile or be it preprocfile both are read same way.
+        ! It could had be concise but focus is to make this work.
 
-        !Read the new file and convert the coordinates in au
-        open(unit=301, file = trim(adjustl(newfile)),iostat=ierr)
-        if (ierr.ne.0) call error(1,"error reading guest file geometry")
-        nmols=0
-        do
-            read(301,*,err=302,end=302) nb
-            nmols=nmols+1
-            molecules(nmols)%natoms = nb
-            read(301,*,err=302,end=302)
-            allocate (molecules(nmols)%bawt(nb),molecules(nmols)%bs(nb),molecules(nmols)%bx(nb),&
-            molecules(nmols)%by(nb),molecules(nmols)%bz(nb),molecules(nmols)%bq(nb),molecules(nmols)%bvdw(nb),stat=ierr)
-            do i = 1,nb
-                read(301,*,err=302,end=302) molecules(nmols)%bs(i),molecules(nmols)%bx(i),molecules(nmols)%by(i),&
-                molecules(nmols)%bz(i), molecules(nmols)%bq(i)
-                molecules(nmols)%bx(i)=molecules(nmols)%bx(i)*angau
-                molecules(nmols)%by(i)=molecules(nmols)%by(i)*angau
-                molecules(nmols)%bz(i)=molecules(nmols)%bz(i)*angau
-            end do
-        enddo
-302     close(301)
-        print *,"Number of molecules detected in input file ",nmols
+        if (len(trim(templatefile))/=0 .and. len(trim(preprocfile))==0) preprocfile =templatefile
+        
 
+        preprocfile=trim(adjustl(preprocfile))
+        splt = index(preprocfile,'.',back=.True.)
+        basename=preprocfile(1:splt-1)
+        extn=preprocfile(splt:)
+        ! If xyz file does not contain partial charges, obabel is used to get initial charges.
+        if (nocharge) then
+            exec = "obabel -ixyz "//trim(adjustl(basename))//trim(adjustl(extn)) &
+            & //" --partialcharge qtpie -omol2 -O " &
+            & //trim(adjustl(basename))// ".mol2"
+            print*,exec
+            call execute_command_line(exec,cmdstat=icmdout,cmdmsg=acmdout)
+            if (icmdout/=0) then
+                print *,"Exiting Code. Input xyz file does not contain charge &
+                    &and openbabel is not installed on your computer."
+                print *,"If you believe you have charges in input xyz file, insert nocharge = .false. in options and rerun."
+                stop
+            else
+                !Read mol2 file
+                open(unit=298, file=trim(adjustl(basename))//".mol2",iostat=ierr)
+                if (ierr.ne.0) call error(1,"error reading mol2 file created internally")
+                nmols=0
+                do
+                    read(298,*,err=299,end=299) mstring
+                    if (len(trim(adjustl(mstring)))>=16 .and. index(mstring,"@<TRIPOS>MOLECULE")==1) then
+                        nmols=nmols+1
+                        read(298,*,err=299,end=299) nb
+                        read(298,*,err=299,end=299) 
+                        read(298,*,err=299,end=299) 
+                        read(298,*,err=299,end=299) 
+                        read(298,*,err=299,end=299) 
+                    elseif (len(trim(adjustl(mstring)))>=12 .and. index(mstring,"@<TRIPOS>ATOM")==1) then
+                        molecules(nmols)%natoms = nb
+                        allocate (molecules(nmols)%bawt(nb),molecules(nmols)%bs(nb),molecules(nmols)%bx(nb),&
+                        molecules(nmols)%by(nb),molecules(nmols)%bz(nb),molecules(nmols)%bq(nb),molecules(nmols)%bvdw(nb),stat=ierr)
+                        do i = 1,nb
+                            read(298,*,err=299,end=299) d1,molecules(nmols)%bs(i),molecules(nmols)%bx(i),molecules(nmols)%by(i),&
+                            molecules(nmols)%bz(i),d2,d3,d4,molecules(nmols)%bq(i)
+                            molecules(nmols)%bx(i)=molecules(nmols)%bx(i)*angau
+                            molecules(nmols)%by(i)=molecules(nmols)%by(i)*angau
+                            molecules(nmols)%bz(i)=molecules(nmols)%bz(i)*angau
+                        end do
+                    endif   
+                enddo
+299             close(298)
+            endif    
+
+        else
+            !Read xyz file as it contains charges
+            open(unit=301, file = trim(adjustl(preprocfile)),iostat=ierr)
+            if (ierr.ne.0) call error(1,"error reading xyz file")
+            nmols=0
+            do
+                read(301,*,err=302,end=302) nb
+                nmols=nmols+1
+                molecules(nmols)%natoms = nb
+                read(301,*,err=302,end=302)
+                allocate (molecules(nmols)%bawt(nb),molecules(nmols)%bs(nb),molecules(nmols)%bx(nb),&
+                molecules(nmols)%by(nb),molecules(nmols)%bz(nb),molecules(nmols)%bq(nb),molecules(nmols)%bvdw(nb),stat=ierr)
+                do i = 1,nb
+                    read(301,*,err=302,end=302) molecules(nmols)%bs(i),molecules(nmols)%bx(i),molecules(nmols)%by(i),&
+                    molecules(nmols)%bz(i), molecules(nmols)%bq(i)
+                    molecules(nmols)%bx(i)=molecules(nmols)%bx(i)*angau
+                    molecules(nmols)%by(i)=molecules(nmols)%by(i)*angau
+                    molecules(nmols)%bz(i)=molecules(nmols)%bz(i)*angau
+                end do
+            enddo
+302         close(301)
+        endif
         ! Allocate an array for atomic mass and van der Waals radii of atoms. 
         ! atmnms are atomic names defined in global module of size 103. If the sym of the 
         ! atom in the new file matches with the declared atomic symbol, the 
@@ -90,8 +202,68 @@
                 end do
             enddo
         enddo
+      
+        ! If insertlocfile is given, the com of first molecule of template file is replicated at mentioned locations.
+        if (trim(adjustl(preprocfile))==trim(adjustl(templatefile)) .and. len_trim(insertlocfile)/=0) then
+            open(unit=304, file = trim(adjustl(insertlocfile)),iostat=ierr)
+            if (ierr.ne.0) call error(1,"error reading xyz file")
+            read(304,*,err=305,end=305) nb
+            read(304,*,err=305,end=305)
+            allocate (pisym(nb),pix(nb),piy(nb),piz(nb),stat=ierr) 
+            do i = 1,nb
+                read(304,*,err=305,end=305) pisym(i),pix(i),piy(i),piz(i) 
+                call ncase(pisym(i))  
+                pix(i)=pix(i)*angau
+                piy(i)=piy(i)*angau
+                piz(i)=piz(i)*angau
+            end do
+305         close(304)
+            tn = molecules(1)%natoms
+            allocate (ts(tn),tx(tn),ty(tn),tz(tn),tq(tn),tw(tn),tv(tn),stat=ierr) 
+            ts = molecules(1)%bs
+            tx = molecules(1)%bx ; ty = molecules(1)%by ; tz = molecules(1)%bz
+            tq = molecules(1)%bq
+            tw = molecules(1)%bawt
+            tv = molecules(1)%bvdw
+            call comass(tn,tx,ty,tz,tw,tcox,tcoy,tcoz)
+            nmols = 0
+            do i =1,nb
+                if (trim(adjustl(pisym(i)))=="X".and.nmols<50) then
+                    nmols = nmols + 1
+                    shiftx = pix(i) - tcox 
+                    shifty = piy(i) - tcoy 
+                    shiftz = piz(i) - tcoz
+                    if (allocated(molecules(nmols)%bawt)) then
+                       deallocate(molecules(nmols)%bawt,molecules(nmols)%bs,molecules(nmols)%bx,&
+                       molecules(nmols)%by,molecules(nmols)%bz,molecules(nmols)%bq,molecules(nmols)%bvdw)
+                    endif
+                    allocate (molecules(nmols)%bawt(tn),molecules(nmols)%bs(tn),molecules(nmols)%bx(tn),&
+                    molecules(nmols)%by(tn),molecules(nmols)%bz(tn),molecules(nmols)%bq(tn),molecules(nmols)%bvdw(tn),stat=ierr)
+                    molecules(nmols)%natoms=tn
+                    do j = 1,tn
+                        molecules(nmols)%bs(j)    =ts(j) 
+                        molecules(nmols)%bx(j)    =tx(j) +shiftx
+                        molecules(nmols)%by(j)    =ty(j) +shifty
+                        molecules(nmols)%bz(j)    =tz(j) +shiftz
+                        molecules(nmols)%bq(j)    =tq(j)
+                        molecules(nmols)%bawt(j)  =tw(j)
+                        molecules(nmols)%bvdw(j)  =tv(j)
+                    enddo
+                endif
+            enddo    
+        endif
 
-        call optimize(nmols,tssize)
+
+        print *,"Number of molecules detected in input file ",nmols
+        
+        call removeclash(nmols)
+
+        call system ("rm -f "//mespimizerinit)
+        call system ("rm -f "//mespimizervis)
+        call system ("rm -f "//mespimizerfinal)
+        call writeclustergeom(mespimizerinit,nmols,0.0d0)
+
+        call optimize(nmols,tssize,rssize,mespimizervis,mespimizerfinal)
 
         tiempo = dtime(tarray)
         write(iout,*)""
@@ -101,10 +273,13 @@
         write(iout,*)""
         close(iden)
         close(iout)
-        stop
+        stop 
         end
-     
-        SUBROUTINE OPTIMIZE(nmols,tssize) 
+
+!!=================================
+!!    Optimization control
+!!=================================
+        SUBROUTINE OPTIMIZE(nmols,tssize,rssize,mespimizervis,mespimizerfinal) 
         USE DAMINITIAL_T
         USE DAMBUILD_T
         IMPLICIT NONE
@@ -112,15 +287,14 @@
         REAL(KREAL), ALLOCATABLE:: bxl(:),byl(:),bzl(:),bql(:),bawtl(:),bvdwl(:)
         integer:: nmols
         REAL(KREAL) :: Enj,tssize 
-        integer(kint)::ierr,i,j,k,nbatms,flag,icurr
+        integer(kint)::ierr,i,j,k,nbatms,flag,icurr,rssize
+        character(256):: mespimizervis,mespimizerfinal
         logical,external:: accept
         
-        call system ("rm -f initialgeo.xyz finalgeo.xyz")
-        Enj=0.0d0 ! Initialize Electrostatic interaction energy 
-        call writeclustergeom("initialgeo.xyz",nmols,Enj)
 
-        open(11,file="visualize.xyz")           
+        open(11,file=trim(adjustl(mespimizervis)))           
         do i = 1,nmols
+            Enj=0.0d0 ! Initialize Electrostatic interaction energy 
             icurr=i
 			nbatms= molecules(i)%natoms
             allocate (bsl(nbatms),bxl(nbatms),byl(nbatms),bzl(nbatms),bql(nbatms),bawtl(nbatms),bvdwl(nbatms),stat=ierr)
@@ -135,7 +309,7 @@
                 bvdwl(j)=molecules(i)%bvdw(j)
             end do 
             if (accept(icurr,nbatms,bxl,byl,bzl,bvdwl)) &
-                call ROTATION(icurr,nbatms,bsl,bxl,byl,bzl,bql,bawtl,bvdwl,flag,enj)
+                call ROTATION(icurr,nbatms,bsl,bxl,byl,bzl,bql,bawtl,bvdwl,flag,rssize,enj)
             do j=1,nbatms
 				molecules(i)%bs(j)=bsl(j)
                 molecules(i)%bx(j)=bxl(j)
@@ -198,7 +372,7 @@
                 bawtl(j)=molecules(i)%bawt(j)
                 bvdwl(j)=molecules(i)%bvdw(j)
             end do 
-            call ROTATION(icurr,nbatms,bsl,bxl,byl,bzl,bql,bawtl,bvdwl,flag,enj)
+            call ROTATION(icurr,nbatms,bsl,bxl,byl,bzl,bql,bawtl,bvdwl,flag,rssize,enj)
             do j=1,nbatms
 				molecules(i)%bs(j)=bsl(j)
                 molecules(i)%bx(j)=bxl(j)
@@ -221,13 +395,14 @@
         enddo
 !
         close(11)
-        call writeclustergeom("finalgeo.xyz",nmols,Enj)
+        call writeclustergeom(mespimizerfinal,nmols,Enj)
 
         end subroutine
 
-!!******************************************
-        SUBROUTINE ROTATION(icurr,nbatms,bsl,bxl,byl,bzl,bql,batwtl,batvdwl,flag,enj)
-!******************************************      
+!!=================================
+!!    Rotation
+!!=================================
+        SUBROUTINE ROTATION(icurr,nbatms,bsl,bxl,byl,bzl,bql,batwtl,batvdwl,flag,as,enj)
         USE DAMBUILD_T
         IMPLICIT NONE 
         INTEGER::nbatms,flag,icurr
@@ -327,7 +502,7 @@
         if (eval<enj .and. (enj-eval).gt.1e-6) then
             enj=eval
 !           write(6,*)ex(1),ex(2),ex(3)
-            write(6,*) "Best energy of all rotations      = ",eval
+            write(6,"(A,E12.5)") "Best energy of all rotations    = ",eval
             i= (ex(1)-1)*as
             theta = real(i)*p_i/180.0d0
             j=(ex(2)-1)*as
@@ -360,10 +535,10 @@
         return
         end subroutine  
 
-!!******************************************
-!!> @details Creates guess points for MED and MESP topography.
+!!=================================
+!!    Translation
+!!=================================
         SUBROUTINE TRANSLATION(icurr,nbatms,bsl,bxl,byl,bzl,bql,batwtl,batvdwl,flag,tssize,enj)
-!!******************************************      
         USE DAMBUILD_T
         IMPLICIT NONE 
         INTEGER::nbatms,flag,icurr
@@ -420,8 +595,7 @@
         if (eval<enj .and. (enj-eval).gt.1e-6) then
             ! print*, "Ok in translation"
             Enj=eval
-!           write(6,*) ex(1),ex(2),ex(3)
-            write(6,*) "Best energy of all translatory moves", eval
+            write(6,"(A,E12.5)") "Best energy of all translations = ",eval
             i=ex(1)-2
             j=ex(2)-2
             k=ex(3)-2
@@ -483,70 +657,122 @@
 !!====================================
 !! Van der Waals overlap check
 !!====================================
-    logical function accept(icurr,nbatms,bxl,byl,bzl,bvdwl)
-    use dambuild_t
-    implicit none
-    integer(kint):: iu,ju,ku,ierr,dum,nbatms,icurr
-    real(kreal), dimension(nbatms):: bxl,byl,bzl,bvdwl
-    real(kreal), dimension(nbatms):: rcom,rcox,rcoy,rcoz
-    real(kreal), dimension(ncen):: DIST
-    
-    accept=.true.
-    do ju=1,ncen
-        do ku=1,nbatms
-            dist(ju) = sqrt((rcen(1,ju)-bxl(ku))**2+(rcen(2,ju)-byl(ku))**2+(rcen(3,ju)-bzl(ku))**2)
-            if ((atvdw(ju)+bvdwl(ku)).gt.dist(ju)) then
-                accept=.false.
-                goto 98 
-            end if   
-        end do
-98  end do       
-    do iu = 1, icurr-1
-        do ju=1,molecules(iu)%natoms
+        logical function accept(icurr,nbatms,bxl,byl,bzl,bvdwl)
+        use dambuild_t
+        implicit none
+        integer(kint):: iu,ju,ku,ierr,dum,nbatms,icurr
+        real(kreal), dimension(nbatms):: bxl,byl,bzl,bvdwl
+        real(kreal), dimension(nbatms):: rcom,rcox,rcoy,rcoz
+        real(kreal), dimension(ncen):: DIST
+        
+        accept=.true.
+        do ju=1,ncen
             do ku=1,nbatms
-                dist(ju) = sqrt((molecules(iu)%bx(ju)-bxl(ku))**2+&
-                                (molecules(iu)%by(ju)-byl(ku))**2+&
-                                (molecules(iu)%bz(ju)-bzl(ku))**2)
-                if ((molecules(iu)%bvdw(ju)+bvdwl(ku)).gt.dist(ju)) then
+                dist(ju) = sqrt((rcen(1,ju)-bxl(ku))**2+(rcen(2,ju)-byl(ku))**2+(rcen(3,ju)-bzl(ku))**2)
+                if ((atvdw(ju)+bvdwl(ku)).gt.dist(ju)) then
                     accept=.false.
-                    goto 99 
+                    goto 98 
                 end if   
             end do
-99      end do
-    end do
+98      end do       
+        do iu = 1, icurr-1
+            do ju=1,molecules(iu)%natoms
+                do ku=1,nbatms
+                    dist(ju) = sqrt((molecules(iu)%bx(ju)-bxl(ku))**2+&
+                                    (molecules(iu)%by(ju)-byl(ku))**2+&
+                                    (molecules(iu)%bz(ju)-bzl(ku))**2)
+                    if ((molecules(iu)%bvdw(ju)+bvdwl(ku)).gt.dist(ju)) then
+                        accept=.false.
+                        goto 99 
+                    end if   
+                end do
+99          end do
+        end do
 
-    return
-    end 
+        return
+        end 
 !
-    SUBROUTINE WRITECLUSTERGEOM(dfilename,nmols,ener)
-    USE DAMINITIAL_T
-    USE DAMBUILD_T
-    integer:: nmols,totalatoms,ierr
-    real(kreal):: ener
-    character(len=*)::dfilename
+!!==================================================================
+!!     Write cluster geometry
+!!==================================================================
+        subroutine writeclustergeom(dfilename,nmols,ener)
+        use daminitial_t
+        use dambuild_t
+        integer:: nmols,totalatoms,ierr
+        real(kreal):: ener
+        character(len=*)::dfilename
 
-    open(unit=8, file = trim(adjustl(dfilename)),iostat=ierr)
+        open(unit=8, file = trim(adjustl(dfilename)),iostat=ierr)
 
-    if (ierr.ne.0) call error(1,"Error in creating new file with &
-    initial geometry of the cluster.")
-    totalatoms=0
-    do i =1,nmols
-        totalatoms=totalatoms+ molecules(i)%natoms
-    enddo   
-    totalatoms=totalatoms+ncen
-    write(8,*) totalatoms
-    write(8,*) "Energy= ",ener             
-    do i = 1,ncen
-        write(8,"(a2,3f15.10)") atmnms( int(zn(i))), (rcen(j,i)*0.529177249d0,j=1,3)
-    end do
-    do i=1,nmols
-        do j = 1,molecules(i)%natoms
-            write(8,"(a2,3f15.10)") molecules(i)%bs(j),molecules(i)%bx(j)*auang,&
-            molecules(i)%by(j)*auang,molecules(i)%bz(j)*auang
+        if (ierr.ne.0) call error(1,"Error in creating new file with &
+        initial geometry of the cluster.")
+        totalatoms=0
+        do i =1,nmols
+            totalatoms=totalatoms+ molecules(i)%natoms
+        enddo   
+        totalatoms=totalatoms+ncen
+        write(8,*) totalatoms
+        write(8,*) "Energy= ",ener             
+        do i = 1,ncen
+            write(8,"(a2,3f15.10)") atmnms( int(zn(i))), (rcen(j,i)*0.529177249d0,j=1,3)
+        end do
+        do i=1,nmols
+            do j = 1,molecules(i)%natoms
+                write(8,"(a2,3f15.10)") molecules(i)%bs(j),molecules(i)%bx(j)*auang,&
+                molecules(i)%by(j)*auang,molecules(i)%bz(j)*auang
+            enddo
         enddo
-    enddo
-    close(8)
-    END SUBROUTINE    
+        close(8)
+        end subroutine    
+
+!!==================================================================
+!!     Separate molecules if they are too close to parent molecule
+!!==================================================================
+        subroutine removeclash(nmols)
+        use daminitial_t
+        use dambuild_t
+        integer:: nmols,iserr
+        real(kreal):: shiftx,shifty,shiftz,dval
+        integer(kint):: iu,ju,ku,dmdist
+        real(kreal),allocatable:: DIST(:,:)
+        integer,allocatable::dary(:)
+        
+        do iu = 1,nmols
+            allocate(dist(ncen,molecules(iu)%natoms))
+            do ju=1,ncen
+                do ku=1,molecules(iu)%natoms
+                    dist(ju,ku) = sqrt((rcen(1,ju)-molecules(iu)%bx(ku))**2+&
+                                    (rcen(2,ju)-molecules(iu)%by(ku))**2+&
+                                    (rcen(3,ju)-molecules(iu)%bz(ku))**2)
+                    if ((atvdw(ju)+molecules(iu)%bvdw(ku)).le.dist(ju,ku)) dist(ju,ku) = 0.0d0
+                end do
+            enddo    
+            dmdist=size(shape(dist))
+            allocate (dary(dmdist),stat=ierr)
+            dary=maxloc(dist)
+            dval=maxval(dist)
+            if (dval>0.001) then
+                !print *,"===Begin======="    
+                !print *,"size(shape(dist))=",dmdist
+                !print *,"max location(dist)=",dary
+                !print *,"Value at maxloc(dist)=",dval 
+                !print *, dist
+                shiftx =molecules(iu)%bx(dary(2))-rcen(1,dary(1))
+                shifty =molecules(iu)%by(dary(2))-rcen(2,dary(1))
+                shiftz =molecules(iu)%bz(dary(2))-rcen(3,dary(1))
+                !print*,shiftx,shifty,shiftz
+                do ku=1,molecules(iu)%natoms
+                    molecules(iu)%bx(ku)=molecules(iu)%bx(ku)+shiftx*2
+                    molecules(iu)%by(ku)=molecules(iu)%by(ku)+shifty*2
+                    molecules(iu)%bz(ku)=molecules(iu)%bz(ku)+shiftz*2
+                enddo    
+                !print *,"===End======="    
+            endif
+            deallocate(dist)
+        end do       
+
+        end subroutine    
+!
 !
 !!******************************************
 !!> @details Creates guess points for MED and MESP topography.
@@ -682,3 +908,4 @@
 !!      return 
 !!      end subroutine
 !!!
+

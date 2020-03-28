@@ -1,0 +1,7 @@
+$OPTIONS
+preprocfile="cyclopropane_3.xyz"
+nocharge=.true.
+tssize=0.5
+rssize=20
+$END
+napthalene
