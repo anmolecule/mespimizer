@@ -12,15 +12,15 @@
         character(256)::exec
         character(256)::acmdout
         character(256)::mstring
-        character(256):: preprocfile,templatefile,insertlocfile
-        character(256):: mespimizerinit,mespimizervis,mespimizerfinal,basename
+        character(256):: preprocfile,templatefile,insertlocfile,qmsoftware,qmkeywords
+        character(256):: mespimizerinit,mespimizervis,mespimizerfinal,basename,mespimizerbase
         character(10)::d1,d2,d3,d4,extn
         integer::icmdout
         logical:: nocharge
 !       character, external:: ncase
         namelist / options / lgradient, lderiv2, largo, lexact, &
                 & lmaxi,filename,preprocfile,templatefile,insertlocfile,&
-                & iswindows,tssize,rssize
+                & iswindows,tssize,rssize,nocharge,qmsoftware,qmkeywords
                          
         tiempo = dtime(tarray)
         lgradient    = .true.
@@ -36,7 +36,9 @@
         tssize       = 0.5
         rssize       = 20
         nocharge     = .true.
-       
+        qmsoftware   = "gaussian"
+        qmkeywords   = "nproc=8,mem=2000Mb,lot=MP2,basis=6-31+G(d),charge=0,multi=1"
+        !"                                                              
         read(5,options)     ! Read from standard input
         read(5,*) projectname
 
@@ -102,12 +104,14 @@
             mespimizerinit=trim(filenamewin)//"_"//trim(basename)//"_init.xyz"
             mespimizervis=trim(filenamewin)//"_"//trim(basename)//"_vis.xyz"
             mespimizerfinal=trim(filenamewin)//"_"//trim(basename)//"_final.xyz"
+            mespimizerbase=trim(filenamewin)//"_"//trim(basename)
         else
             mespimizerinit=trim(filename)//"_"//trim(basename)//"_init.xyz"
             mespimizervis=trim(filename)//"_"//trim(basename)//"_vis.xyz"
             mespimizerfinal=trim(filename)//"_"//trim(basename)//"_final.xyz"
+            mespimizerbase=trim(filename)//"_"//trim(basename)
         endif
-        print *,mespimizerinit,mespimizervis,mespimizerfinal
+        !print *,mespimizerinit,mespimizervis,mespimizerfinal
 
         call predampot
         
@@ -252,9 +256,11 @@
                 endif
             enddo    
         endif
+        
+        !COM for host molecule is evaluated here.
+        call comass(ncen,rcen(1,:),rcen(2,:),rcen(3,:),atwt,hcox,hcoy,hcoz)
 
-
-        print *,"Number of molecules detected in input file ",nmols
+        print *,"Number of guest molecules in input file ",nmols
         
         call removeclash(nmols)
 
@@ -262,8 +268,8 @@
         call system ("rm -f "//mespimizervis)
         call system ("rm -f "//mespimizerfinal)
         call writeclustergeom(mespimizerinit,nmols,0.0d0)
-
         call optimize(nmols,tssize,rssize,mespimizervis,mespimizerfinal)
+        call writeqminput(qmsoftware,qmkeywords,mespimizerbase,nmols)
 
         tiempo = dtime(tarray)
         write(iout,*)""
@@ -619,7 +625,7 @@
         USE DAMBUILD_T
         IMPLICIT NONE
         INTEGER:: i,ncatms
-		REAL(KREAL):: coxl,coyl,cozl,tmass
+        REAL(KREAL):: coxl,coyl,cozl,tmass
         REAL(KREAL), DIMENSION(ncatms):: cx,cy,cz,catwt
        
         coxl=0.0d0; coyl=0.0d0; cozl=0.0d0; tmass=0.0d0
@@ -693,7 +699,7 @@
         end 
 !
 !!==================================================================
-!!     Write cluster geometry
+!!     Write xyz file of cluster
 !!==================================================================
         subroutine writeclustergeom(dfilename,nmols,ener)
         use daminitial_t
@@ -713,17 +719,138 @@
         totalatoms=totalatoms+ncen
         write(8,*) totalatoms
         write(8,*) "Energy= ",ener             
+        call writecoordinates(8,nmols)        
+        close(8)
+        end subroutine    
+
+!!==================================================================
+!!     Write input for QM calculations
+!!==================================================================
+        subroutine writeqminput(software,keywords,ifilebase,nmols)
+        implicit none
+        integer:: nmols,ierr
+        integer,parameter:: funit=8
+        character(len=*)::ifilebase,keywords
+        character(20)::software,nproc,mem,lot,basis
+        character(2)::charge,multi
+        ! Initialize the qm keywords in case someone passes null in keywords
+        nproc="8"
+        mem="1500Mb"
+        lot="MP2"
+        basis="6-31+G(d)"
+        charge="0"
+        multi="1"
+        ! End Initialization
+
+        call processkeyword(keywords,nproc,mem,lot,basis,charge,multi)
+
+        if (software=="gaussian") open(unit=funit, file = trim(adjustl(ifilebase))//".com",iostat=ierr)
+        call top(funit,software,ifilebase,nproc,mem,lot,basis,charge,multi)
+        call writecoordinates(funit,nmols)        
+        call bottom(funit,software,lot,basis)
+        close(funit)
+        end subroutine
+
+!!==================================================================
+!!     Process the qmkeywords. It is rigid in its format, but does the job
+!!==================================================================
+        subroutine processkeyword(keywords,nproc,mem,lot,basis,charge,multi)
+        implicit none
+        integer::i,n,p
+        integer,dimension(7):: comma
+        character(len=*)::keywords
+        character(40)::string
+        character(20),intent(out)::nproc,mem,lot,basis
+        character(2),intent(out)::charge,multi
+        n=1
+        comma(n)=1
+        do i=1,len(keywords)
+            if (keywords(i:i)==",") then
+                n=n+1
+                comma(n)=i
+            endif
+        enddo
+        do i=1,6
+            string=keywords(comma(i)+1:comma(i+1)-1)
+            if ((i==1) .and. (string(:index(string,'=')-1)=="nproc")) then
+                nproc=string(index(string,'=')+1:)
+            elseif ((i==2) .and. string(:index(string,"=")-1)=="mem") then
+                mem=string(index(string,"=")+1:)
+            elseif ((i==3) .and. string(:index(string,"=")-1)=="lot") then
+                lot=string(index(string,"=")+1:)
+            elseif ((i==4) .and. string(:index(string,"=")-1)=="basis") then
+                basis=string(index(string,"=")+1:)
+            elseif ((i==5) .and. string(:index(string,"=")-1)=="charge") then
+                charge=string(index(string,"=")+1:)
+            elseif ((i==6) .and. string(:index(string,"=")-1)=="multi") then
+                multi=string(index(string,"=")+1:)
+        endif
+        enddo   
+        end subroutine
+
+!!==========================================================================================
+!!      Compile strings that usually appear on top of geometry description in qm input file 
+!!==========================================================================================
+        subroutine top(funit,software,ifilebase,nproc,mem,lot,basis,charge,multi)
+        implicit none
+        integer:: funit
+        character(len=*)::software,ifilebase,nproc,mem,lot,basis,charge,multi
+        if (software=="gaussian") then
+            write(funit,"(a)") "%chk="//trim(ifilebase)//".chk"
+            write(funit,"(a)") "%nprocShared="//trim(nproc)
+            write(funit,"(a)") "%mem="//trim(mem)
+            write(funit,"(a)") "#p "//trim(lot)//"/"//trim(basis)//" OPT  "// " NOSYMM "
+            !"                  
+            write(funit,"(a)") " "
+            write(funit,"(a)") "Created by DAMQT"
+            write(funit,"(a)") " "
+            write(funit,"(a)") charge//" "//multi
+        elseif (software=="gamess") then
+            write(funit,"(a)") "$CONTRL SCFTYP="//lot//" CHARGE="//charge//" MULT="//multi//" RUNTYP=OPTIMIZE COORD=CART $END"
+            write(funit,"(a)") "$SYSTEM TIMLIM=1 MWORDS=1 $END"
+            write(funit,"(a)") "$STATPT OPTTOL=1.0E-5  $END"
+            write(funit,"(a)") "$BASIS  GBASIS=STO NGAUSS=2 $END"
+            write(funit,"(a)") "$DATA"
+            write(funit,"(a)") "Created by DAMQT" 
+            write(funit,"(a)") "Cnv  2"
+        elseif (software=="nwchem") then
+            write(funit,"(a)") "DUMMY"
+        endif
+        end subroutine
+
+!!================================================================================================
+!!      Compile strings that usually appear at bottom after geometry description in qm input file 
+!!================================================================================================
+        subroutine bottom(funit,software,lot,basis)
+        implicit none
+        integer:: funit
+        character(len=*)::software,lot,basis
+        if (software=="gaussian") then
+            write(funit,"(a)") " "
+        elseif (software=="gamess") then
+            write(funit,"(a)") "$END"
+        elseif (software=="nwchem") then
+            write(funit,"(a)") "DUMMY"
+        endif
+        end subroutine
+
+!!==========================
+!!      Write coordinates 
+!!==========================
+        subroutine writecoordinates(funit,nmols)
+        use daminitial_t
+        use dambuild_t
+        integer:: nmols,funit
         do i = 1,ncen
-            write(8,"(a2,3f15.10)") atmnms( int(zn(i))), (rcen(j,i)*0.529177249d0,j=1,3)
+            write(funit,"(a2,3f15.10)") atmnms( int(zn(i))), (rcen(j,i)*0.529177249d0,j=1,3)
         end do
         do i=1,nmols
             do j = 1,molecules(i)%natoms
-                write(8,"(a2,3f15.10)") molecules(i)%bs(j),molecules(i)%bx(j)*auang,&
+                write(funit,"(a2,3f15.10)") molecules(i)%bs(j),molecules(i)%bx(j)*auang,&
                 molecules(i)%by(j)*auang,molecules(i)%bz(j)*auang
             enddo
         enddo
-        close(8)
-        end subroutine    
+        end subroutine
 
 !!==================================================================
 !!     Separate molecules if they are too close to parent molecule
@@ -732,10 +859,13 @@
         use daminitial_t
         use dambuild_t
         integer:: nmols,iserr
-        real(kreal):: shiftx,shifty,shiftz,dval
+        real(kreal):: shiftx,shifty,shiftz,dval,norm
         integer(kint):: iu,ju,ku,dmdist
         real(kreal),allocatable:: DIST(:,:)
         integer,allocatable::dary(:)
+        integer:: tn
+        real(kreal):: tcox,tcoy,tcoz
+        real(kreal),allocatable ::tx(:),ty(:),tz(:),tw(:)
         
         do iu = 1,nmols
             allocate(dist(ncen,molecules(iu)%natoms))
@@ -744,7 +874,11 @@
                     dist(ju,ku) = sqrt((rcen(1,ju)-molecules(iu)%bx(ku))**2+&
                                     (rcen(2,ju)-molecules(iu)%by(ku))**2+&
                                     (rcen(3,ju)-molecules(iu)%bz(ku))**2)
-                    if ((atvdw(ju)+molecules(iu)%bvdw(ku)).le.dist(ju,ku)) dist(ju,ku) = 0.0d0
+                    if ((atvdw(ju)+molecules(iu)%bvdw(ku)).le.dist(ju,ku))  then
+                        dist(ju,ku) = 0.0d0
+                    else
+                        dist(ju,ku) = atvdw(ju)+molecules(iu)%bvdw(ku)-dist(ju,ku)
+                    endif
                 end do
             enddo    
             dmdist=size(shape(dist))
@@ -757,16 +891,22 @@
                 !print *,"max location(dist)=",dary
                 !print *,"Value at maxloc(dist)=",dval 
                 !print *, dist
-                shiftx =molecules(iu)%bx(dary(2))-rcen(1,dary(1))
-                shifty =molecules(iu)%by(dary(2))-rcen(2,dary(1))
-                shiftz =molecules(iu)%bz(dary(2))-rcen(3,dary(1))
-                !print*,shiftx,shifty,shiftz
+                tn = molecules(iu)%natoms
+                allocate (tx(tn),ty(tn),tz(tn),tw(tn),stat=ierr) 
+                tx = molecules(iu)%bx ; ty = molecules(iu)%by ; tz = molecules(iu)%bz
+                tw = molecules(iu)%bawt
+                call comass(tn,tx,ty,tz,tw,tcox,tcoy,tcoz)
+                shiftx = tcox-hcox  
+                shifty = tcoy-hcoy
+                shiftz = tcoz-hcoz
+                norm=max(abs(shiftx),abs(shifty),abs(shiftz))
+                shitfx=shiftx/norm;shifty=shifty/norm;shiftz=shiftz/norm
+                scldval=dval*1.5
                 do ku=1,molecules(iu)%natoms
-                    molecules(iu)%bx(ku)=molecules(iu)%bx(ku)+shiftx*2
-                    molecules(iu)%by(ku)=molecules(iu)%by(ku)+shifty*2
-                    molecules(iu)%bz(ku)=molecules(iu)%bz(ku)+shiftz*2
+                    molecules(iu)%bx(ku)=molecules(iu)%bx(ku)+shiftx*scldval
+                    molecules(iu)%by(ku)=molecules(iu)%by(ku)+shifty*scldval
+                    molecules(iu)%bz(ku)=molecules(iu)%bz(ku)+shiftz*scldval
                 enddo    
-                !print *,"===End======="    
             endif
             deallocate(dist)
         end do       

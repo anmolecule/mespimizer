@@ -1,7 +1,10 @@
 $OPTIONS
-preprocfile="cyclopropane_3.xyz"
-nocharge=.true.
+templatefile="cyclopropane.xyz"
+insertlocfile="napthalene-insertloc-cps.xyz"
+nocharge=.false.
 tssize=0.5
 rssize=20
+qmsoftware="gaussian"
+qmkeywords="nproc=8,mem=2000Mb,lot=CCSD,basis=6-31+G(d),charge=0,multi=1"
 $END
 napthalene

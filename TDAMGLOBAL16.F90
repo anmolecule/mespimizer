@@ -272,6 +272,7 @@
         REAL(KREAL):: cox,coy,coz
 		end type molecule
         type(molecule),dimension(50):: molecules
+        REAL(KREAL)::hcox,hcoy,hcoz
     END MODULE
 !===============================================================================================
 !                 MODULE DAM2016_CONST_T
